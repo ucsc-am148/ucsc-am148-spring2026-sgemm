@@ -16,7 +16,7 @@ repo. Each push that touches `kernels.py` triggers the autograder,
 which runs on a Modal A100 40GB and posts your grade as a comment on
 the commit.
 
-You have **5 graded submissions per assignment**. Use them don't push
+You have **10 graded submissions per assignment**. Use them don't push
 half-baked attempts. Run the local sanity check first.
 
 ## Grading rubric
