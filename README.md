@@ -127,6 +127,111 @@ locally you'll need `cupy-cuda12x` (also in `requirements.txt`). The
 reward for passing K6 on the autograder is not yet decided; for now,
 treat it as a learning bonus.
 
+## Kernel specifications
+
+A short spec for each kernel; the docstring inside each `@cuda.jit`
+function in `kernels.py` has more detailed hints.
+
+### K1 — Naive (worked example)
+
+One thread per output element. Each thread loops over K and accumulates
+`A[x, i] * B[i, y]` into a register, then writes one C element. No
+tiling, no shared memory; every multiply pulls fresh from global
+memory.
+
+**Provided as a reference implementation; you do not edit K1.**
+
+Use it as a template for the `@cuda.jit` signature and bounds-check
+pattern every kernel must follow.
+
+  Tile: implicit 32 × 32 (one thread per element).
+  Launch: `block = (BLOCKSIZE, BLOCKSIZE)` (32×32, 2D);
+  `grid = (ceil(M/BLOCKSIZE), ceil(N/BLOCKSIZE))`.
+  Thread maps directly: `x = blockIdx.x * blockDim.x + threadIdx.x`,
+  `y = blockIdx.y * blockDim.y + threadIdx.y`. Note that consecutive
+  threads in a warp share `x` and step in `y` (fixed in K2)
+
+### K2 — GMEM coalescing
+
+Rewrite K1 so that 32 threads in a warp write to 32 *consecutive
+columns* of C (and read 32 consecutive elements of B). The arithmetic
+stays identical to K1; only the threadIdx-to-output mapping changes.
+The new mapping makes `B[i, y]` reads and `C[x, y]` stores collapse
+into 128-byte transactions.
+
+- Tile: 32 × 32 output per block.
+- Launch: `block = (BLOCKSIZE * BLOCKSIZE,)` (1024 threads, 1D);
+  `grid = (ceil(M/32), ceil(N/32))`.
+
+**Suggestion**: with `threadIdx.x` running 0..1023, derive
+`(row_in_tile, col_in_tile)` using integer division and modulo by
+`BLOCKSIZE`. Be careful which derived value indexes the column —
+that's the whole point of the optimization.
+
+### K3 — Shared-memory cache-blocking
+
+Compute each `BM3 × BN3` output tile by streaming the K dimension in
+chunks of `BK3`. Each input element of A and B should be loaded from
+global memory once per block (instead of once per thread, like in K2).
+
+- Tile sizes: `BM3 = BN3 = BK3 = 32`.
+- Launch: `block = (BM3 * BN3,)` (1024 threads, 1D);
+  `grid = (ceil(M/BM3), ceil(N/BN3))`.
+
+**Suggestion**: per K-chunk, do four steps —
+
+1. Cooperatively load `As[BM3, BK3]` and `Bs[BK3, BN3]` into shared
+   memory (one element per thread per slice). Use `0.0` when the
+   global index is out of bounds (the K loop walks past the end of K).
+2. `cuda.syncthreads()`.
+3. Each thread accumulates `acc += As[local_row, dk] * Bs[dk, local_col]`
+   for `dk in range(BK3)`.
+4. `cuda.syncthreads()` before the next K-chunk.
+
+Use `cuda.shared.array((BM3, BK3), float32)` for `As` and the matching
+shape `(BK3, BN3)` for `Bs`.
+
+### K4 — 1D register tiling
+
+Extend K3 so that each thread owns `TM4 = 8` rows in a single column of
+the `BM4 × BN4` output tile and keeps `TM4` register accumulators. Per
+inner-k step, broadcast one `Bs[dk, thread_col]` value and FMA it into
+all `TM4` accumulators against `TM4` `As` values from one column of
+`As`. Arithmetic intensity goes up by `TM4` over K3.
+
+- Tile sizes: `BM4 = BN4 = 64`, `BK4 = 8`, `TM4 = 8`.
+- Launch: `block = ((BM4 * BN4) // TM4,)` (512 threads);
+  `grid = (ceil(N/BN4), ceil(M/BM4))`. From K4 onward `blockIdx.x`
+  indexes *columns* of C (axis swap from K1–K3); `run_k4` does the
+  swap on the launch side.
+
+**Suggestion**: cooperative loads are tidy here — A's tile is
+`BM4 × BK4 = 512` elements, B's is `BK4 × BN4 = 512`, and you have
+512 threads, so exactly one element per thread per tile (no inner-load
+loop). Use `cuda.local.array(TM4, float32)` for the per-thread
+accumulator and initialize every entry to 0.0 before the K-loop.
+
+### K5 — 2D register tiling
+
+Extend K4 to a `TM5 × TN5 = 8 × 8` register tile per thread. Inside
+the inner-k loop, cache `TM5` `As` values and `TN5` `Bs` values into
+register arrays and do the `TM5 × TN5` outer-product update — 64 FMAs
+per dk step against `TM5 + TN5 = 16` register loads.
+
+- Tile sizes: `BM5 = BN5 = 128`, `BK5 = 8`, `TM5 = TN5 = 8`.
+- Launch: `block = ((BM5 * BN5) // (TM5 * TN5),)` (256 threads);
+  `grid = (ceil(N/BN5), ceil(M/BM5))`.
+
+**Suggestion**: cooperative loads now need a stride loop because the
+tile has `BM5 * BK5 = 1024` elements but the block has only 256
+threads, so each thread loads `1024 / 256 = 4` elements of A per
+K-chunk and similarly for B. Pick the per-thread row stride so
+consecutive threads touch consecutive memory addresses (= coalesced
+GMEM loads). Use `cuda.local.array((TM5, TN5), float32)` for the
+accumulators (numba supports tuple-shaped local arrays); two more
+`cuda.local.array(TM5, float32)` / `cuda.local.array(TN5, float32)`
+hold the cached `reg_a` / `reg_b` for the outer product.
+
 ## References
 
 - siboehm's blog: <https://siboehm.com/articles/22/CUDA-MMM>
