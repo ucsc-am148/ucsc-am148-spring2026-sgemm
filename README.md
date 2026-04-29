@@ -43,7 +43,7 @@ in order!
 ## Where to run the sanity check
 
 `sanity_check.py` runs your kernels at 256² and 512² and compares
-against a numpy reference. It is **correctness only** — passing does
+against a numpy reference. It is **correctness only**. Passing does
 not guarantee a passing grade, since the autograder also enforces a
 performance floor. K2–K5 will show up as `FAIL` until you implement
 them; K1 (worked example) should `PASS` immediately.
@@ -71,7 +71,7 @@ Colab provides a free T4 GPU.
 3. Run these three cells:
 
    ```python
-   # Cell 1 — upload kernels.py and sanity_check.py from your local clone.
+   # Cell 1: upload kernels.py and sanity_check.py from your local clone.
    from google.colab import files
    files.upload()  # browse and select both files
    ```
@@ -91,7 +91,7 @@ a `%%writefile kernels.py` magic cell to edit in-notebook. Colab's T4
 has a different perf profile than the autograder's A100 correctness
 results will track, but timings will not.
 
-### Option C — Modal A100 (matches the autograder)
+### Option C: Modal A100 (matches the autograder)
 
 Modal gives every account $30/month of free credit, which is enough
 for thousands of sanity checks on the same A100 40GB the autograder
@@ -110,13 +110,13 @@ representative timings before spending a graded submission.
 
 ## Files in this repo
 
-- `kernels.py`            — your edit surface; numba kernels for K1–K5
-- `sanity_check.py`       — local correctness + rough timing
-- `modal_sanity.py`       — `modal run` wrapper that runs sanity_check on A100 (Option C above)
-- `kernel6_stretch.cu`    — optional stretch goal (cupy.RawKernel; see below)
-- `requirements.txt`      — Python deps
-- `README.md`             — this file
-- `.github/workflows/sgemm-grader.yml` — the autograder Action (don't edit)
+- `kernels.py`: your edit surface; numba kernels for K1–K5
+- `sanity_check.py`: local correctness + rough timing
+- `modal_sanity.py`: `modal run` wrapper that runs sanity_check on A100 (Option C above)
+- `kernel6_stretch.cu`: optional stretch goal (cupy.RawKernel; see below)
+- `requirements.txt`: Python deps
+- `README.md`: this file
+- `.github/workflows/sgemm-grader.yml`: the autograder Action (don't edit)
 
 ## Stretch (K6)
 
@@ -132,7 +132,7 @@ treat it as a learning bonus.
 A short spec for each kernel; the docstring inside each `@cuda.jit`
 function in `kernels.py` has more detailed hints.
 
-### K1 — Naive (worked example)
+### K1: Naive (worked example)
 
 One thread per output element. Each thread loops over K and accumulates
 `A[x, i] * B[i, y]` into a register, then writes one C element. No
@@ -151,7 +151,7 @@ pattern every kernel must follow.
   `y = blockIdx.y * blockDim.y + threadIdx.y`. Note that consecutive
   threads in a warp share `x` and step in `y` (fixed in K2)
 
-### K2 — GMEM coalescing
+### K2: GMEM coalescing
 
 Rewrite K1 so that 32 threads in a warp write to 32 *consecutive
 columns* of C (and read 32 consecutive elements of B). The arithmetic
@@ -165,10 +165,10 @@ into 128-byte transactions.
 
 **Suggestion**: with `threadIdx.x` running 0..1023, derive
 `(row_in_tile, col_in_tile)` using integer division and modulo by
-`BLOCKSIZE`. Be careful which derived value indexes the column —
+`BLOCKSIZE`. Be careful which derived value indexes the column
 that's the whole point of the optimization.
 
-### K3 — Shared-memory cache-blocking
+### K3: Shared-memory cache-blocking
 
 Compute each `BM3 × BN3` output tile by streaming the K dimension in
 chunks of `BK3`. Each input element of A and B should be loaded from
@@ -178,7 +178,7 @@ global memory once per block (instead of once per thread, like in K2).
 - Launch: `block = (BM3 * BN3,)` (1024 threads, 1D);
   `grid = (ceil(M/BM3), ceil(N/BN3))`.
 
-**Suggestion**: per K-chunk, do four steps —
+**Suggestion**: per K-chunk, do four steps:
 
 1. Cooperatively load `As[BM3, BK3]` and `Bs[BK3, BN3]` into shared
    memory (one element per thread per slice). Use `0.0` when the
@@ -191,7 +191,7 @@ global memory once per block (instead of once per thread, like in K2).
 Use `cuda.shared.array((BM3, BK3), float32)` for `As` and the matching
 shape `(BK3, BN3)` for `Bs`.
 
-### K4 — 1D register tiling
+### K4: 1D register tiling
 
 Extend K3 so that each thread owns `TM4 = 8` rows in a single column of
 the `BM4 × BN4` output tile and keeps `TM4` register accumulators. Per
@@ -205,17 +205,17 @@ all `TM4` accumulators against `TM4` `As` values from one column of
   indexes *columns* of C (axis swap from K1–K3); `run_k4` does the
   swap on the launch side.
 
-**Suggestion**: cooperative loads are tidy here — A's tile is
+**Suggestion**: cooperative loads are tidy here. A's tile is
 `BM4 × BK4 = 512` elements, B's is `BK4 × BN4 = 512`, and you have
 512 threads, so exactly one element per thread per tile (no inner-load
 loop). Use `cuda.local.array(TM4, float32)` for the per-thread
 accumulator and initialize every entry to 0.0 before the K-loop.
 
-### K5 — 2D register tiling
+### K5: 2D register tiling
 
 Extend K4 to a `TM5 × TN5 = 8 × 8` register tile per thread. Inside
 the inner-k loop, cache `TM5` `As` values and `TN5` `Bs` values into
-register arrays and do the `TM5 × TN5` outer-product update — 64 FMAs
+register arrays and do the `TM5 × TN5` outer-product update: 64 FMAs
 per dk step against `TM5 + TN5 = 16` register loads.
 
 - Tile sizes: `BM5 = BN5 = 128`, `BK5 = 8`, `TM5 = TN5 = 8`.
