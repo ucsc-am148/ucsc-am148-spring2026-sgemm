@@ -185,7 +185,7 @@ def run_k5(A, B, C, M, N, K):
     sgemm_2d_tile[grid, block](A, B, C, M, N, K)
 
 
-# Graded kernels in the order the rubric uses (1/4 → C, 2/4 → B-, ...).
+# Graded kernels in the order the rubric uses (1/4 → C, 2/4 → C+, 3/4 → B-, 4/4 → B).
 KERNELS = [
     ("k2_coalesce", run_k2),
     ("k3_smem",     run_k3),

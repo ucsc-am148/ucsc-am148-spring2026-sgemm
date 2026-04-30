@@ -33,9 +33,9 @@ Both checks must pass for a kernel to count. Grading is **cumulative**:
 | Kernels passed         | Grade |
 | ---------------------- | ----- |
 | K2                     | C     |
-| K2 + K3                | B−    |
-| K2 + K3 + K4           | B     |
-| K2 + K3 + K4 + K5      | B+    |
+| K2 + K3                | C+    |
+| K2 + K3 + K4           | B−    |
+| K2 + K3 + K4 + K5      | B     |
 
 K3 only counts if K2 also passes, K4 only if K2+K3, etc. So implement
 in order!
